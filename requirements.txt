@@ -1,0 +1,5 @@
+openai-whisper
+yt-dlp
+requests
+boto3
+openai
