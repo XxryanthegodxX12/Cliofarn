@@ -1,0 +1,6 @@
+openai-whisper
+yt-dlp
+requests
+boto3
+openai
+youtube-transcript-api
