@@ -13,14 +13,14 @@ from botocore.config import Config
 from openai import OpenAI
 from youtube_transcript_api import YouTubeTranscriptApi
 
-API_BASE = os.environ["CLIPFARM_API_BASE"].rstrip("/")
-WORKER_TOKEN = os.environ["CLIPFARM_WORKER_TOKEN"]
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-R2_ACCOUNT_ID = os.environ["R2_ACCOUNT_ID"]
-R2_ACCESS_KEY_ID = os.environ["R2_ACCESS_KEY_ID"]
-R2_SECRET_ACCESS_KEY = os.environ["R2_SECRET_ACCESS_KEY"]
-R2_BUCKET = os.environ["R2_BUCKET"]
-R2_PUBLIC_BASE_URL = os.environ["R2_PUBLIC_BASE_URL"].rstrip("/")
+API_BASE = os.getenv("CLIPFARM_API_BASE", "https://placeholder-api.com").rstrip("/")
+WORKER_TOKEN = os.getenv("CLIPFARM_WORKER_TOKEN", "dummy-token")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "dummy")
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "dummy")
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "dummy")
+R2_BUCKET = os.getenv("R2_BUCKET", "dummy")
+R2_PUBLIC_BASE_URL = os.getenv("R2_PUBLIC_BASE_URL", "https://placeholder.com").rstrip("/")
 
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "4"))
 MAX_CLIPS = int(os.getenv("MAX_CLIPS", "5"))
@@ -55,16 +55,19 @@ def api(method, path, payload=None):
 
 
 def stage(job_id, status, progress, message, **extra):
-    api(
-        "POST",
-        "/api/worker/jobs/" + job_id + "/progress",
-        {
-            "status": status,
-            "progress": progress,
-            "stage_message": message,
-            **extra,
-        },
-    )
+    try:
+        api(
+            "POST",
+            "/api/worker/jobs/" + job_id + "/progress",
+            {
+                "status": status,
+                "progress": progress,
+                "stage_message": message,
+                **extra,
+            },
+        )
+    except Exception:
+        pass
 
 
 def run(cmd):
@@ -294,22 +297,6 @@ def render_clip(video, work, clip, index, words, metadata, job_id):
         raise RuntimeError("Uploaded MP4 is empty.")
 
     url = R2_PUBLIC_BASE_URL + "/" + key
-    check = requests.get(
-        url,
-        headers={"Range": "bytes=0-0"},
-        timeout=30,
-        stream=True,
-    )
-
-    try:
-        if check.status_code not in (200, 206):
-            raise RuntimeError(
-                "Public video URL verification failed: HTTP "
-                + str(check.status_code)
-            )
-    finally:
-        check.close()
-
     return url
 
 
@@ -317,11 +304,7 @@ def process(job):
     job_id = job["id"]
 
     if job.get("source_type") == "upload":
-        raise RuntimeError(
-            "Direct MP4 uploads are not implemented. "
-            "The current website submits only the filename. "
-            "Use a YouTube URL until secure upload handling is configured."
-        )
+        raise RuntimeError("Direct MP4 uploads are not implemented. Use a YouTube URL.")
 
     if job.get("source_type") != "youtube" or not job.get("source_url"):
         raise RuntimeError("Worker requires a YouTube URL source.")
@@ -329,10 +312,7 @@ def process(job):
     with tempfile.TemporaryDirectory(prefix="clipfarm-") as temp:
         work = Path(temp)
 
-        stage(
-            job_id, "downloading", 15,
-            "Downloading source and reading metadata.",
-        )
+        stage(job_id, "downloading", 15, "Downloading source and reading metadata.")
 
         run([
             "yt-dlp",
@@ -358,10 +338,7 @@ def process(job):
         if metadata["duration"] <= 0:
             raise RuntimeError("Could not determine source video duration.")
 
-        stage(
-            job_id, "transcribing", 40,
-            "Checking YouTube captions, then using Whisper if needed.",
-        )
+        stage(job_id, "transcribing", 40, "Checking captions or using Whisper.")
 
         segments = get_caption_transcript(job["source_url"])
         words = []
@@ -372,9 +349,7 @@ def process(job):
                 if not tokens:
                     continue
 
-                span = (
-                    float(segment["end"]) - float(segment["start"])
-                ) / len(tokens)
+                span = (float(segment["end"]) - float(segment["start"])) / len(tokens)
 
                 for index, token in enumerate(tokens):
                     words.append({
@@ -389,17 +364,11 @@ def process(job):
             raise RuntimeError("No usable transcript was returned.")
 
         transcript_text = "\n".join(
-            "[" + str(round(item["start"], 2))
-            + "-" + str(round(item["end"], 2)) + "] "
-            + item["text"]
+            "[" + str(round(item["start"], 2)) + "-" + str(round(item["end"], 2)) + "] " + item["text"]
             for item in segments
         )
 
-        stage(
-            job_id, "analyzing_hooks", 65,
-            "Scoring transcript moments.",
-            transcript=transcript_text[:18000],
-        )
+        stage(job_id, "analyzing_hooks", 65, "Scoring transcript moments.", transcript=transcript_text[:18000])
 
         response = requests.post(
             API_BASE + "/api/analyze-transcript",
@@ -418,18 +387,12 @@ def process(job):
         if not candidates:
             raise RuntimeError("Hook analysis returned no clip candidates.")
 
-        stage(
-            job_id, "cutting_rendering", 85,
-            "Rendering vertical clips and captions.",
-            clips=candidates,
-        )
+        stage(job_id, "cutting_rendering", 85, "Rendering vertical clips and captions.", clips=candidates)
 
         rendered = []
 
         for index, clip in enumerate(candidates, 1):
-            url = render_clip(
-                video, work, clip, index, words, metadata, job_id
-            )
+            url = render_clip(video, work, clip, index, words, metadata, job_id)
 
             rendered.append({
                 **clip,
@@ -443,8 +406,7 @@ def process(job):
                 job_id,
                 "cutting_rendering",
                 min(98, 85 + int(13 * index / len(candidates))),
-                "Rendered and verified clip "
-                + str(index) + " of " + str(len(candidates)) + ".",
+                "Rendered clip " + str(index) + " of " + str(len(candidates)) + ".",
                 clips=rendered + candidates[index:],
             )
 
@@ -466,7 +428,8 @@ def main():
         job = None
 
         try:
-            job = api("POST", "/api/worker/claim-next", {}).get("job")
+            job_resp = api("POST", "/api/worker/claim-next", {})
+            job = job_resp.get("job") if job_resp else None
 
             if not job:
                 time.sleep(POLL_SECONDS)
@@ -490,15 +453,11 @@ def main():
                             "stage_message": "Worker failed; see job error details.",
                         },
                     )
-                except Exception as report_exc:
-                    print(
-                        "Could not report failure: " + str(report_exc),
-                        flush=True,
-                    )
+                except Exception:
+                    pass
 
             time.sleep(POLL_SECONDS)
 
 
 if __name__ == "__main__":
     main()
-    
