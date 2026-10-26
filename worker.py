@@ -15,7 +15,7 @@ from youtube_transcript_api import YouTubeTranscriptApi
 
 API_BASE = os.getenv("CLIPFARM_API_BASE", "https://placeholder-api.com").rstrip("/")
 WORKER_TOKEN = os.getenv("CLIPFARM_WORKER_TOKEN", "dummy-token")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or "sk-proj-dummyplaceholderkey"
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "dummy")
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "dummy")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "dummy")
